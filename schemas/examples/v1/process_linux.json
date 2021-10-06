@@ -1,0 +1,295 @@
+
+/* NEW FIELDSET TYPES
+  file descriptors aka 'fds'
+  this data is used to track pipes, files, sockets in use by a process
+  We can infer whether a process or session is interactive 
+  by checking if the process has an FD to the controlling tty
+ "fds": [
+   {
+     "fdNo": 0,
+     "major": 138,
+     "minor": 22
+   }
+ ]
+
+ // new fieldset to capture tty a chunk of output on stdout/stderr stdin??
+ // process category events with these fields set should set action=tty and type=info
+ // it's possible a single process will generate 0 or more of these 'info' events
+ "tty": {
+   "type": "stdout", // unsure if we can make this determination or (bpf might now be able to track this)
+   "data": "base64 encoded output data to preserve whitespace and escape sequences"
+ }
+END NEW FIELDSET TYPES*/
+
+/* ADDITIONS TO EXISTING FIELDSET TYPES
+  google 'man 7 credentials' for info on real vs effective vs saved  
+  "user": {
+    "Ext": {
+      // real userId 
+      "real": {
+        "id": 1,
+        "name": "kg"
+      },
+      
+      // saved userId (NEW ADDITION)
+      "saved": {
+        "id": 1,
+        "name": "kg"
+      },
+      
+      // assuming this data is the "effective user" e.g euid 
+      "id": 0,
+      "name": "root"
+    }
+  }
+
+  "group": {
+    "Ext": {
+      // real groupId
+      "real": {
+        "id": 0,
+        "name": "user"
+      },
+      
+      // saved groupId (NEW ADDITION)
+      "saved": {
+        "id": 0,
+        "name": "user"
+      }  
+    },
+
+    // effective groupId
+    "id": 0,
+    "name": "root"
+  }
+*/
+
+// example "process" message with many of the Cmd specifics ported over to existing or new ECS fields 
+{
+  "@timestamp": "2020-03-03T19:08:32.74626000Z",
+  "message": "Endpoint process event",
+  "agent": {
+    "id": "836977bf-9105-4667-9157-bd698e96c45d",
+    "type": "endpoint",
+    "version": "1.0.0-demo.20200229.4"
+  },
+  "ecs": {
+    "version": "1.6.0"
+  },
+  "event": {
+    "action": "exec", // values include "fork", "exec", "end" (a new "tty" or "output" action should be added for capturing tty output)
+    "agent_id_status": "auth_metadata_missing",
+    "category": "process",
+    "created": "2021-07-22T17:58:57.814Z",
+    "dataset": "endpoint.events.process",
+    "id": "MDUloV/5P+4v0J8/+++/GlQc",
+    "ingested": "2021-07-22T17:59:08.670Z",
+    "kind": "event",
+    "module": "endpoint",
+    "sequence": "48106",
+    "type": "start"
+  },
+  
+  "group": { ...group } 
+
+  "host": {
+    "architecture": "x86_64",
+    "hostname": "james-fleet-714-2",
+    "id": "48c1b3f1ac5da4e0057fc9f60f4d1d5d",
+    "ip": "127.0.0.1,::1,10.132.0.50,70.52.109.215,fe80::7d39:3147:4d9a:f809",
+    "mac": "42:01:0a:84:00:32",
+    "name": "james-fleet-714-2",
+    "os": {
+      "Ext": {
+        "variant": "CentOS"
+      },
+      "family": "centos",
+      "full": "CentOS 7.9.2009",
+      "kernel": "3.10.0-1160.31.1.el7.x86_64 #1 SMP Thu Jun 10 13:32:12 UTC 2021",
+      "name": "Linux",
+      "platform": "centos",
+      "version": "7.9.2009"
+    },
+    "geo": {
+      "city_name": "Montreal",
+      "continent_name": "North America",
+      "country_iso_code": "CA",
+      "country_name": "Canada",
+      "location": {
+        "lon": -73.61483,
+        "lat": 45.505918
+      },
+      "region_iso_code": "CA-QC",
+      "region_name": "Quebec"
+    },
+
+    // NEW ADDITIONS (not sure if "host" is the best place for this)
+    "boot_id": "1234" // changes with each reboot (could be used as part of unique generation of "process.entity_id")
+  },
+
+  // container related information (if any)
+  "container": {
+    "id": "0c4e3b80c0b3fb798b4163dbc489ed739e67435bdfd83545c7fc45c0419c135c", // maps to Cmd's cri_container_id
+    "name": "nginx", // maps to Cmd's cri_container_name
+    "image": {
+      "name": "nginx:v1", // probably doesn't map to our cri_container_image (as that is apparently an image sha256 hash in our model)
+      "tag": ["a", "b"] ??
+    },
+    "labels": ???,
+    "runtime": "docker"
+  },
+  "orchestration": {
+    "api_version": "v1.0",
+    "type": "kubernetes",
+    "namespace": "kube-system", // maps to Cmd's cri_namespace field
+    "cluster": {
+      "name": "webapp" // maps to cri_node_name ???
+      "url": ???
+    },
+    "resource": {
+      "type": "pod", // unsure if that is a valid value
+      "name": "test-pod-cdcws" // maps to Cmd's cri_pod_name
+    }
+  },
+
+  "process": {
+    "args": ["/usr/bin/ssh", "-l", "user", "10.0.0.16"],
+    "args_count": 4,
+    "command_line": "/usr/bin/ssh -l user 10.0.0.16",
+
+    // entity_id calculation should maybe align with how cmd generates process_uuid
+    // e.g from cmd-collector (golang)
+    // a uuid derived from boot_id, pid_ns_ino, pid, and start time ticks (is the 'start' date below granular enough?)
+    // 72   func (i InternalProcessKey) UUID() uuid.UUID {
+    // 73   b := &bytes.Buffer{}
+    // 74   b.Write(i.BootID.Bytes())
+    // 75   _ = binary.Write(b, binary.BigEndian, i.PidNsIno)
+    // 76   _ = binary.Write(b, binary.BigEndian, i.Pid)
+    // 77   _ = binary.Write(b, binary.BigEndian, i.StartTimeTicks)
+    // 78   return uuid.NewSHA1(uuid.UUID{}, b.Bytes())
+    // 79 }
+    "entity_id": "ODM2OTc3YmYtOTEwNS00NjY3LTkxNTctYmQ2OThlOTZjNDVkLTQtMTMyMjczOTE3OTIuOTcyMDYzMDA=",
+    "executable": "/usr/bin/ssh",
+    "hash": {
+      "md5": "85ee35395b48c3e0816727818c7de3d1",
+      "sha1": "28e923c48a8a8e93c00d34bde5bbf9a3fffea666",
+      "sha256": "322e939f9ebc92dcc55208bc2350625fd2f9501ac4d3bf72d882d00a9bf9bfcf"
+    },
+    "name": "ssh",
+    "parent": { ...process },
+
+    "pid": 5,
+    "pgid": 11,
+    "start": "2016-05-23T08:05:34.853Z",
+
+    // end and exit_code set only if event.action == 'end'
+    "end": "2016-05-23T08:06:34.853Z", 
+    "exit_code": 137,
+
+    "thread": {
+      "id": 4242
+    },
+
+    "working_directory": "/etc",
+    
+    // NEW FIELDS
+    "sid": 10, // unix session leader id
+    "cpu": {
+      "id": 1 // identifies the cpu core on which the event was observed (unsure of what use this has)
+    }, 
+    
+    // String. PID namespace ID from which the process was observed. See “man 7 namespaces” for additional details. 
+    // also can be used in unique entity_id generation
+    "pid_ns_ino": "4026531836" 
+
+    // user and group info should be a property of process
+    // this allows the ancestor processes defined below to also have this info
+    // and we can ask questions like process.user.id != process.parent.user.id (priviledge escalation?) 
+    "user": { ...user },
+    "group": { ...group },
+    "fds": { ...fds }, 
+
+    // important ancestor processes (they should have all the same fields set as "process"
+    "session": { ...process }, // the first direct session leader process
+    "last_known_uep": { ...process }, // last known user entered process
+    "inception": { ...process } // the entry point inception session leader process
+
+    // optional calculated fields? (potentially useful for query optimization, filtering out large amounts of non-interactive events)
+    "interactive": true|false // based on ctty/stdout/stdin/stderr open fd's
+    // current definition as taken from cmd-collector code base
+    // interactive = ctty.major == stdin.major && ctty.major == stderr.major && ctty.minor == stdin.minor && ctty.minor == stderr.minor
+
+    "user_typed": true|false // a fairly experimental calculation (based on tracking interactive processes who's parent has a different process group)
+    // current definition as taken from cmd-collector
+    // user_typed = interactive && process.pgid != process.parent.pgid
+
+    "session_leader": true|false // pretty much a linux fact
+    // current definition as taken from cmd-collector
+    // session_leader = process.pid == process.sid 
+  },
+    
+  // see fieldset definition above
+  // my understanding is this top level "user" would have the same info as process.user
+  // keeping this to not break backwards compatibility
+  "user": { ...user },
+
+  // remote client session information
+  // it was recommended to populate these fieldsets for remote ssh info
+  // see: https://elastic.slack.com/archives/CNW9Y42KV/p1633370162133200
+  // it's also recommended to set event.category: ["process", "network"] if these fields are set. 
+  // potentially "session" category as well.
+  "source": {
+    "ip": "24.68.1.123",
+    "port": 22,
+    "mac": "00-00-5E-00-53-23", // not sure if this info is easily accessible. would be cool though
+    "bytes": 1024, // might be interesting to have this info. (it would most likely grow with each process event that is sent for an inception session)
+    "geo": {
+      "city_name": "Vancouver",
+      "continent_name": "North America",
+      "country_iso_code": "CA",
+      "country_name": "Canada",
+      "location": {
+        "lon": -73.61483,
+        "lat": 45.505918
+      },
+      "region_iso_code": "CA-BC",
+      "region_name": "British Columbia"
+    },
+
+    // we can nest "user" here if we want. see https://www.elastic.co/guide/en/ecs/1.12/ecs-source.html#ecs-source-nestings
+    // though the connecting linux user info could be found at process.inception.user as well. so possibly redundant to have here.
+    "user": { ...user }
+  },
+  // this in most situations will be the same as "host" section, but would probably have specifics on interface used
+  "destination": {
+    "ip": "70.52.109.215",
+    "port": 22,
+    "mac": "01-22-2A-6A-23", // destination interface
+    "bytes": 1024, // bytes sent from dest to source. also useful info to have :)
+    "geo": {
+      "city_name": "Montreal",
+      "continent_name": "North America",
+      "country_iso_code": "CA",
+      "country_name": "Canada",
+      "location": {
+        "lon": -73.61483,
+        "lat": 45.505918
+      },
+      "region_iso_code": "CA-QC",
+      "region_name": "Quebec"
+    }
+  },
+  
+  // it was suggested to populate "client" and "server" fieldsets as well, which
+  // seems to share all the same props as "source" and "destination" (maybe legacy naming?)
+  "client": { ...same as source },
+  "server": { ...same as destination },
+
+  // trying to find a home for entry_mechanism (ssh,init,aws_ssm,container)
+  // perhaps? open to suggestions.
+  "network": {
+    "application": "ssh|aws_ssm|container" // maybe if entry_mechanism is "init" we don't set this?
+  },
+  
+  "tty": { ...tty } // the tty output generated by the "process" (unsure if this should be top level or be nested under "process"
+}
